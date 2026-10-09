@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+reports/*.md
+!reports/.gitkeep
+.env
+*.db
+*.webarchive
+*.db-journal
+.DS_Store
+web/dist/
+server/dist/
+electron/dist/
+release/

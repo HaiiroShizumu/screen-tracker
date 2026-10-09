@@ -1,0 +1,44 @@
+{
+  "name": "electron-app",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac dir"
+  },
+  "devDependencies": {
+    "electron": "^35.0.2",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "local.screen.tracker",
+    "productName": "Screen Tracker",
+    "directories": {
+      "output": "../release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dir"]
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": ["dist/**", "package.json", "node_modules/**"]
+      },
+      {
+        "from": "../web/dist",
+        "to": "web-dist"
+      },
+      {
+        "from": "../.env",
+        "to": ".env"
+      }
+    ]
+  }
+}
