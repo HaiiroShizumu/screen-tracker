@@ -17,6 +17,8 @@ export interface BitrixTask {
   task_id: number;
   title: string;
   responsible_id: number | null;
+  status: number;
+  deadline: string | null;
   deal_ids: string;
   company_ids: string;
   web_urls: string;

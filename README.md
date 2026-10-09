@@ -29,7 +29,21 @@ npm run build:mac
 
 ## Права macOS
 
-System Settings → Privacy & Security → **Automation**: Terminal/Node/Electron → System Events, Google Chrome / Safari / Arc.
+System Settings → Privacy & Security → **Automation**: Screen Tracker / Electron / Terminal → System Events, Google Chrome / Safari / Arc.
+
+При запуске `.app` покажет диалог и уведомление, если прав не хватает (повтор каждые ~4 часа). В UI — баннер с кнопкой в настройки.
+
+## Автозапуск при включении Mac
+
+В Electron `.app` автозапуск включается сам (`openAtLogin`).
+
+Дополнительно (если Gatekeeper мешает login item):
+
+```bash
+chmod +x scripts/install-login-item.sh
+./scripts/install-login-item.sh
+# или: ./scripts/install-login-item.sh "/Applications/Screen Tracker.app"
+```
 
 ## Bitrix
 

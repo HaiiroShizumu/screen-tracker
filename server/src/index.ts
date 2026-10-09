@@ -10,6 +10,8 @@ import { syncBitrixTasks } from "./bitrix.js";
 import { rebuildMatches } from "./matcher.js";
 import { writeDailyReport } from "./reports.js";
 import { dayKey } from "./util.js";
+import { migrateMiscApps, purgeNoiseSegments } from "./db.js";
+import { MISC_APP_LABEL } from "./misc-apps.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 dotenv.config({ path: path.join(root, ".env") });
@@ -28,6 +30,32 @@ app.use((req, res, next) => {
     if (err) next();
   });
 });
+
+migrateMiscApps(
+  [
+    "Finder",
+    "Preview",
+    "Просмотр",
+    "System Settings",
+    "System Preferences",
+    "Настройки",
+    "CleanShot X",
+    "Shottr",
+    "Screenshot",
+    "Raycast",
+    "Alfred",
+    "Calculator",
+    "Калькулятор",
+    "Activity Monitor",
+    "App Store",
+    "Control Center",
+    "Notification Center",
+    "Spotlight",
+    "Dock",
+  ],
+  MISC_APP_LABEL
+);
+purgeNoiseSegments();
 
 startCollector();
 

@@ -1,25 +1,68 @@
 @import "tailwindcss";
 
+/* Shadcnblocks Admin Kit — neutral (black/white only), light + dark via system */
 @theme {
-  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --color-background: #f7f6f3;
-  --color-foreground: #1c1917;
+
+  --color-background: #ffffff;
+  --color-foreground: #0a0a0a;
   --color-card: #ffffff;
-  --color-muted: #f0eeea;
-  --color-muted-foreground: #78716c;
-  --color-border: #e7e5e0;
-  --color-primary: #0f766e;
-  --color-primary-foreground: #f0fdfa;
-  --color-accent: #c2410c;
-  --color-sidebar: #1c1917;
-  --color-sidebar-fg: #e7e5e0;
-  --color-sidebar-muted: #a8a29e;
-  --color-chart-1: #0f766e;
-  --color-chart-2: #c2410c;
-  --color-chart-3: #0369a1;
-  --color-chart-4: #a16207;
-  --color-chart-5: #7c3aed;
+  --color-card-foreground: #0a0a0a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0a0a0a;
+  --color-primary: #171717;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #f5f5f5;
+  --color-secondary-foreground: #171717;
+  --color-muted: #f5f5f5;
+  --color-muted-foreground: #737373;
+  --color-accent: #f5f5f5;
+  --color-accent-foreground: #171717;
+  --color-destructive: #e40014;
+  --color-border: #e5e5e5;
+  --color-input: #e5e5e5;
+  --color-ring: #a1a1a1;
+  --color-success: #171717;
+  --color-warning: #737373;
+
+  /* grayscale charts */
+  --color-chart-1: #171717;
+  --color-chart-2: #404040;
+  --color-chart-3: #737373;
+  --color-chart-4: #a3a3a3;
+  --color-chart-5: #d4d4d4;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-background: #0a0a0a;
+    --color-foreground: #fafafa;
+    --color-card: #171717;
+    --color-card-foreground: #fafafa;
+    --color-popover: #171717;
+    --color-popover-foreground: #fafafa;
+    --color-primary: #e5e5e5;
+    --color-primary-foreground: #171717;
+    --color-secondary: #262626;
+    --color-secondary-foreground: #fafafa;
+    --color-muted: #262626;
+    --color-muted-foreground: #a1a1a1;
+    --color-accent: #262626;
+    --color-accent-foreground: #fafafa;
+    --color-destructive: #ff6568;
+    --color-border: #ffffff1a;
+    --color-input: #ffffff26;
+    --color-ring: #737373;
+    --color-success: #fafafa;
+    --color-warning: #a1a1a1;
+
+    --color-chart-1: #fafafa;
+    --color-chart-2: #d4d4d4;
+    --color-chart-3: #a3a3a3;
+    --color-chart-4: #737373;
+    --color-chart-5: #525252;
+  }
 }
 
 * {
@@ -35,10 +78,12 @@ body,
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background:
-    radial-gradient(1200px 600px at 10% -10%, #d8efe9 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, #f3e0d4 0%, transparent 50%),
-    var(--color-background);
+  background: var(--color-background);
   color: var(--color-foreground);
   -webkit-font-smoothing: antialiased;
+}
+
+input[type="date"],
+select {
+  color-scheme: light dark;
 }

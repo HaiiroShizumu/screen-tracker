@@ -8,8 +8,8 @@
     "dist": "electron-builder --mac dir"
   },
   "devDependencies": {
-    "electron": "^35.0.2",
-    "electron-builder": "^25.1.8"
+    "electron": "35.0.2",
+    "electron-builder": "25.1.8"
   },
   "build": {
     "appId": "local.screen.tracker",
@@ -19,11 +19,17 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
-      "target": ["dir"]
+      "target": ["dir"],
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Screen Tracker читает активное приложение и URL вкладок браузера, чтобы учитывать время по задачам.",
+        "NSAppleScriptEnabled": true
+      }
     },
     "files": [
       "main.cjs",
-      "preload.cjs"
+      "preload.cjs",
+      "permissions.cjs",
+      "tray-chart.cjs"
     ],
     "extraResources": [
       {

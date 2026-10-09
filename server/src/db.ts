@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS bitrix_tasks (
   task_id INTEGER PRIMARY KEY,
   title TEXT NOT NULL,
   responsible_id INTEGER,
+  status INTEGER NOT NULL DEFAULT 2,
   deal_ids TEXT NOT NULL DEFAULT '[]',
   company_ids TEXT NOT NULL DEFAULT '[]',
   web_urls TEXT NOT NULL DEFAULT '[]',
@@ -56,6 +57,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `);
 
+/** Additive column migrations (SQLite has no IF NOT EXISTS for columns). */
+function ensureColumn(table: string, column: string, defSql: string) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${defSql}`);
+}
+ensureColumn("bitrix_tasks", "status", "INTEGER NOT NULL DEFAULT 2");
+ensureColumn("bitrix_tasks", "deadline", "TEXT");
+
 export function getMeta(key: string): string | null {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as
     | { value: string }
@@ -67,4 +77,37 @@ export function setMeta(key: string, value: string) {
   db.prepare(
     "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
   ).run(key, value);
+}
+
+/** One-shot: rewrite known misc app names in existing rows. */
+export function migrateMiscApps(names: string[], label: string) {
+  if (getMeta("misc_apps_v1")) return;
+  const stmt = db.prepare(`UPDATE activity_segments SET app = ?, title = ? WHERE lower(app) = lower(?)`);
+  const tx = db.transaction(() => {
+    for (const n of names) stmt.run(label, label, n);
+  });
+  tx();
+  setMeta("misc_apps_v1", "1");
+}
+
+/** Remove Unknown / newtab / chrome:// junk from history. */
+export function purgeNoiseSegments() {
+  if (getMeta("purge_noise_v2")) return;
+  db.exec(`
+    DELETE FROM activity_segments
+    WHERE lower(app) = 'unknown'
+       OR lower(coalesce(domain,'')) LIKE '%newtab%'
+       OR lower(coalesce(domain,'')) IN ('(no url)', 'newtab', 'new-tab-page')
+       OR lower(coalesce(url,'')) LIKE '%newtab%'
+       OR lower(coalesce(url,'')) LIKE 'chrome://%'
+       OR lower(coalesce(url,'')) LIKE 'edge://%'
+       OR lower(coalesce(url,'')) LIKE 'brave://%'
+       OR lower(coalesce(url,'')) LIKE 'about:%'
+       OR lower(coalesce(url,'')) LIKE 'chrome-extension://%';
+    DELETE FROM activity_matches
+    WHERE segment_group_key LIKE '%app:Unknown%'
+       OR lower(coalesce(domain,'')) LIKE '%newtab%'
+       OR domain = '(no url)';
+  `);
+  setMeta("purge_noise_v2", "1");
 }

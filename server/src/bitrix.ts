@@ -107,9 +107,11 @@ export async function syncBitrixTasks(): Promise<{ count: number; userId: number
     id: string;
     title: string;
     responsibleId?: string;
+    status?: string;
+    deadline?: string | null;
     ufCrmTask?: unknown;
   };
-  const tasks: TaskT[] = [];
+  const raw: TaskT[] = [];
 
   let start = 0;
   for (;;) {
@@ -119,9 +121,9 @@ export async function syncBitrixTasks(): Promise<{ count: number; userId: number
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({
-          // only open-ish tasks
-          filter: { RESPONSIBLE_ID: userId, "!REAL_STATUS": 5 },
-          select: ["ID", "TITLE", "RESPONSIBLE_ID", "UF_CRM_TASK"],
+          // open + исполнитель или соисполнитель
+          filter: { MEMBER: userId, "!STATUS": 5 },
+          select: ["ID", "TITLE", "RESPONSIBLE_ID", "STATUS", "DEADLINE", "UF_CRM_TASK"],
           start,
         }),
       },
@@ -135,11 +137,14 @@ export async function syncBitrixTasks(): Promise<{ count: number; userId: number
     };
     if (json.error) throw new Error(`tasks.task.list: ${json.error} ${json.error_description || ""}`);
     const batch = json.result?.tasks || [];
-    tasks.push(...batch);
+    raw.push(...batch);
     if (json.next == null || batch.length === 0) break;
     start = json.next;
-    if (tasks.length > 500) break; // ponytail: hard cap
+    if (raw.length > 500) break; // ponytail: hard cap
   }
+
+  // skip «Диалоги» chatter tasks
+  const tasks = raw.filter((t) => !/диалог/i.test(t.title || ""));
 
   const companyCache = new Map<number, string[]>();
   const dealCompany = new Map<number, number | null>();
@@ -181,11 +186,13 @@ export async function syncBitrixTasks(): Promise<{ count: number; userId: number
   });
 
   const upsert = db.prepare(
-    `INSERT INTO bitrix_tasks (task_id, title, responsible_id, deal_ids, company_ids, web_urls, synced_at)
-     VALUES (@task_id, @title, @responsible_id, @deal_ids, @company_ids, @web_urls, @synced_at)
+    `INSERT INTO bitrix_tasks (task_id, title, responsible_id, status, deadline, deal_ids, company_ids, web_urls, synced_at)
+     VALUES (@task_id, @title, @responsible_id, @status, @deadline, @deal_ids, @company_ids, @web_urls, @synced_at)
      ON CONFLICT(task_id) DO UPDATE SET
        title=excluded.title,
        responsible_id=excluded.responsible_id,
+       status=excluded.status,
+       deadline=excluded.deadline,
        deal_ids=excluded.deal_ids,
        company_ids=excluded.company_ids,
        web_urls=excluded.web_urls,
@@ -208,11 +215,20 @@ export async function syncBitrixTasks(): Promise<{ count: number; userId: number
         task_id: Number(t.id),
         title: t.title,
         responsible_id: Number(t.responsibleId || userId),
+        status: Number(t.status || 2),
+        deadline: t.deadline || null,
         deal_ids: JSON.stringify(links.deals),
         company_ids: JSON.stringify([...companyIds]),
         web_urls: JSON.stringify([...webs]),
         synced_at: now,
       });
+    }
+    // drop completed / filtered-out / no longer assigned
+    const keep = new Set(tasks.map((t) => Number(t.id)));
+    const stale = db.prepare("SELECT task_id FROM bitrix_tasks").all() as Array<{ task_id: number }>;
+    const del = db.prepare("DELETE FROM bitrix_tasks WHERE task_id = ?");
+    for (const row of stale) {
+      if (!keep.has(row.task_id)) del.run(row.task_id);
     }
   });
   tx();
@@ -240,11 +256,18 @@ export async function addElapsed(
 
 export function listCachedTasks() {
   return db
-    .prepare("SELECT * FROM bitrix_tasks ORDER BY title COLLATE NOCASE")
+    .prepare(
+      `SELECT * FROM bitrix_tasks
+       ORDER BY CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
+                deadline ASC,
+                title COLLATE NOCASE`
+    )
     .all() as Array<{
     task_id: number;
     title: string;
     responsible_id: number | null;
+    status: number;
+    deadline: string | null;
     deal_ids: string;
     company_ids: string;
     web_urls: string;
