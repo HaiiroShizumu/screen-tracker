@@ -3,19 +3,39 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
-import { api, type Overview as OverviewData, type RangePreset } from "@/lib/api";
+import { api, type Overview as OverviewData } from "@/lib/api";
+import {
+  CATEGORY_COLORS,
+  CATEGORY_LABELS,
+  CATEGORY_ORDER,
+  type Category,
+} from "@/lib/categories";
 import { formatDuration, today } from "@/lib/utils";
-import { Badge, Button, Card, Input, Select } from "@/components/ui";
+import { Button, Card } from "@/components/ui";
 import { ActivityTimeline } from "@/components/ActivityTimeline";
+import { DatePicker } from "@/components/date-picker";
+
+const COMPANY_COLORS = [
+  "var(--color-cat-code)",
+  "var(--color-cat-research)",
+  "var(--color-cat-ai)",
+  "var(--color-cat-comms)",
+  "var(--color-cat-other)",
+  "#f472b6",
+  "#a3e635",
+  "#38bdf8",
+];
 
 export function OverviewPage() {
-  const [range, setRange] = useState<RangePreset>("day");
   const [day, setDay] = useState(today());
   const [data, setData] = useState<OverviewData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -25,7 +45,7 @@ export function OverviewPage() {
     setLoading(true);
     setErr(null);
     try {
-      setData(await api.overview(range, day));
+      setData(await api.overview("day", day));
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -35,91 +55,43 @@ export function OverviewPage() {
 
   useEffect(() => {
     void load();
-  }, [range, day]);
+  }, [day]);
 
-  const areaData = useMemo(() => {
-    const buckets = new Map<string, number>();
-    for (const seg of data?.timeline || []) {
-      const d = new Date(seg.ts_start);
-      const key =
-        range === "day"
-          ? `${String(d.getHours()).padStart(2, "0")}:${d.getMinutes() < 30 ? "00" : "30"}`
-          : `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      buckets.set(key, (buckets.get(key) || 0) + seg.duration_sec / 60);
-    }
-
-    // Always fill 09:00–18:00 in 30-min steps
-    if (range === "day") {
-      const out: { name: string; minutes: number }[] = [];
-      for (let m = 9 * 60; m <= 18 * 60; m += 30) {
-        const name = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-        out.push({ name, minutes: Math.round((buckets.get(name) || 0) * 10) / 10 });
-      }
-      return out;
-    }
-
-    const days = range === "week" ? 7 : 30;
-    const out: { name: string; minutes: number }[] = [];
-    const anchor = new Date(`${day}T12:00:00`);
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(anchor);
-      d.setDate(d.getDate() - i);
-      const name = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      out.push({ name, minutes: Math.round((buckets.get(name) || 0) * 10) / 10 });
-    }
-    return out;
-  }, [data, range, day]);
-
-  const focusRows = useMemo(() => {
-    const sites = (data?.byDomain || [])
-      .filter((r) => {
-        const n = r.name.toLowerCase();
-        return n && n !== "(no url)" && !n.includes("newtab");
-      })
-      .map((r) => ({
-        name: r.name,
-        seconds: r.seconds,
-        kind: "site" as const,
-      }));
-
-    const projects = (data?.byApp || [])
-      .filter((r) => /^(Cursor|Code)\s·\s/.test(r.name))
-      .map((r) => ({
-        name: r.name.replace(/^(Cursor|Code)\s·\s/, ""),
-        seconds: r.seconds,
-        kind: "project" as const,
-        editor: r.name.startsWith("Code") ? "Code" : "Cursor",
-      }));
-
-    const merged = [...sites, ...projects].sort((a, b) => b.seconds - a.seconds);
-    const total = merged.reduce((s, r) => s + r.seconds, 0) || 1;
-    return merged.slice(0, 10).map((r) => {
-      const editor = r.kind === "project" ? (r as { editor?: string }).editor || "Cursor" : null;
-      return {
-        ...r,
-        timeLabel: r.seconds < 60 ? `${r.seconds}с` : `${Math.round(r.seconds / 60)}м`,
-        pct: Math.round((r.seconds / total) * 100),
-        label: editor ? `${editor} · ${r.name}` : r.name,
-      };
-    });
+  const stackedData = useMemo(() => {
+    if (data?.hourlyStacked?.length) return data.hourlyStacked;
+    return [];
   }, [data]);
 
-  const appBars = useMemo(
+  const hasStacked = stackedData.some((row) =>
+    CATEGORY_ORDER.some((c) => Number(row[c] || 0) > 0)
+  );
+
+  const donutData = useMemo(
     () =>
-      (data?.byApp || [])
-        .filter((r) => r.name.toLowerCase() !== "unknown")
-        .slice(0, 8)
-        .map((r) => ({
-          name: r.name.length > 14 ? r.name.slice(0, 12) + "…" : r.name,
-          minutes: Math.round(r.seconds / 60),
-        })),
+      (data?.byCategory || []).map((c) => ({
+        name: c.name,
+        id: c.id,
+        seconds: c.seconds,
+        minutes: Math.round(c.seconds / 60),
+      })),
     [data]
   );
 
-  const activeMin = Math.round((data?.kpi.active_sec || 0) / 60);
-  const idleMin = Math.round((data?.kpi.idle_sec || 0) / 60);
+  const donutTotal = donutData.reduce((s, d) => s + d.seconds, 0);
+
+  const companyRows = useMemo(() => {
+    const rows = data?.byCompany || [];
+    const total = rows.reduce((s, r) => s + r.seconds, 0) || 1;
+    return rows.map((r, i) => ({
+      ...r,
+      pct: Math.round((r.seconds / total) * 100),
+      color: COMPANY_COLORS[i % COMPANY_COLORS.length],
+      host: `${r.name}.bitrix24.ru`,
+    }));
+  }, [data]);
+
   const matchPct = data?.kpi.match_pct ?? 0;
-  const segments = data?.timeline.length ?? 0;
+  const vsY = data?.kpi.vs_yesterday_pct;
 
   return (
     <div className="space-y-6">
@@ -131,12 +103,7 @@ export function OverviewPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
-          <Select value={range} onChange={(e) => setRange(e.target.value as RangePreset)}>
-            <option value="day">День</option>
-            <option value="week">Неделя</option>
-            <option value="month">Месяц</option>
-          </Select>
+          <DatePicker value={day} onChange={setDay} />
           <Button variant="outline" onClick={() => void load()} disabled={loading}>
             Обновить
           </Button>
@@ -149,26 +116,40 @@ export function OverviewPage() {
         </Card>
       )}
 
-      {/* Top charts row — like Budgets + Visitors */}
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="p-5 lg:col-span-3">
           <div className="mb-1 font-semibold tracking-tight">Активность по времени</div>
           <p className="mb-4 text-sm text-[var(--color-muted-foreground)]">
-            Минуты фокуса {range === "day" ? "по часам" : "по дням"}
+            Минуты по категориям по полчаса
           </p>
+          <div className="mb-3 flex flex-wrap gap-3 text-xs text-[var(--color-muted-foreground)]">
+            {CATEGORY_ORDER.map((c) => (
+              <span key={c} className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ background: CATEGORY_COLORS[c] }}
+                />
+                {CATEGORY_LABELS[c]}
+              </span>
+            ))}
+          </div>
           <div className="h-64">
-            {areaData.every((d) => d.minutes === 0) ? (
+            {!hasStacked ? (
               <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted-foreground)]">
                 Нет данных за выбранный период
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={areaData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <BarChart
+                  data={stackedData}
+                  margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                  barCategoryGap="8%"
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                   <XAxis
                     dataKey="name"
                     tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-                    interval={range === "day" ? 1 : 0}
+                    interval={1}
                     minTickGap={4}
                   />
                   <YAxis
@@ -178,21 +159,30 @@ export function OverviewPage() {
                   />
                   <Tooltip
                     cursor={{ fill: "var(--color-muted)" }}
+                    wrapperStyle={{ zIndex: 50 }}
                     contentStyle={{
-                      background: "var(--color-card)",
+                      background: "var(--color-popover)",
                       border: "1px solid var(--color-border)",
                       borderRadius: 8,
-                      color: "var(--color-foreground)",
+                      boxShadow: "0 4px 12px rgb(0 0 0 / 0.12)",
                     }}
                     labelStyle={{ color: "var(--color-muted-foreground)" }}
-                    formatter={(v: number) => [`${v} мин`, "фокус"]}
+                    itemStyle={{ color: "var(--color-foreground)" }}
+                    formatter={(v: number, name: string) => [
+                      `${v} мин`,
+                      CATEGORY_LABELS[name as Category] || name,
+                    ]}
                   />
-                  <Bar
-                    dataKey="minutes"
-                    fill="var(--color-foreground)"
-                    radius={[2, 2, 0, 0]}
-                    maxBarSize={range === "day" ? 14 : 28}
-                  />
+                  {CATEGORY_ORDER.map((c, i) => (
+                    <Bar
+                      key={c}
+                      dataKey={c}
+                      stackId="a"
+                      fill={CATEGORY_COLORS[c]}
+                      radius={i === CATEGORY_ORDER.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
+                      maxBarSize={22}
+                    />
+                  ))}
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -200,125 +190,121 @@ export function OverviewPage() {
           <div className="mt-3 flex items-center gap-2 text-sm text-[var(--color-muted-foreground)]">
             <TrendingUp className="h-4 w-4 text-[var(--color-success)]" />
             Matched {matchPct}% · {formatDuration(data?.kpi.active_sec || 0)} активно
+            {vsY != null ? ` · ${vsY >= 0 ? "+" : ""}${vsY}% к вчера` : ""}
           </div>
         </Card>
 
         <Card className="p-5 lg:col-span-2">
-          <div className="mb-1 font-semibold tracking-tight">Сайты и проекты</div>
+          <div className="mb-1 font-semibold tracking-tight">По категориям</div>
           <p className="mb-4 text-sm text-[var(--color-muted-foreground)]">
-            Домены браузера и папки Cursor / VS Code
+            Распределение активного времени
           </p>
-          {focusRows.length === 0 ? (
-            <div className="flex h-56 items-center justify-center text-sm text-[var(--color-muted-foreground)]">
-              Пока нет сайтов и проектов
+          <div className="mb-3 flex flex-wrap gap-3 text-xs text-[var(--color-muted-foreground)]">
+            {CATEGORY_ORDER.map((c) => (
+              <span key={c} className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ background: CATEGORY_COLORS[c] }}
+                />
+                {CATEGORY_LABELS[c]}
+              </span>
+            ))}
+          </div>
+          {donutData.length === 0 ? (
+            <div className="flex h-72 items-center justify-center text-sm text-[var(--color-muted-foreground)]">
+              Пока нет данных
             </div>
           ) : (
-            <div className="flex max-h-64 flex-col gap-3 overflow-auto pr-1">
-              {focusRows.map((d) => (
-                <div key={`${d.kind}:${d.label}`} className="space-y-1.5">
-                  <div className="flex items-baseline justify-between gap-2 text-sm">
-                    <span className="flex min-w-0 items-center gap-2 truncate font-medium" title={d.label}>
-                      <span
-                        className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted-foreground)] bg-[var(--color-muted)]"
-                      >
-                        {d.kind === "project" ? "IDE" : "WEB"}
-                      </span>
-                      <span className="truncate">{d.label}</span>
-                    </span>
-                    <span className="shrink-0 tabular-nums text-[var(--color-muted-foreground)]">
-                      {d.timeLabel} · {d.pct}%
-                    </span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[var(--color-muted)]">
-                    <div
-                      className="h-full rounded-full bg-[var(--color-foreground)]"
-                      style={{ width: `${Math.max(d.pct, 2)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
+            <div className="relative h-72 overflow-visible">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={donutData}
+                    dataKey="seconds"
+                    nameKey="name"
+                    innerRadius="55%"
+                    outerRadius="88%"
+                    paddingAngle={2}
+                    stroke="var(--color-card)"
+                  >
+                    {donutData.map((d) => (
+                      <Cell key={d.id} fill={CATEGORY_COLORS[d.id]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    wrapperStyle={{ zIndex: 50 }}
+                    contentStyle={{
+                      background: "var(--color-popover)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                      boxShadow: "0 4px 12px rgb(0 0 0 / 0.12)",
+                    }}
+                    labelStyle={{ color: "var(--color-foreground)", fontWeight: 600 }}
+                    itemStyle={{ color: "var(--color-foreground)" }}
+                    formatter={(v: number, name: string) => [formatDuration(v), name]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                <div className="text-xl font-bold tracking-tight">{formatDuration(donutTotal)}</div>
+                <div className="text-xs text-[var(--color-muted-foreground)]">всего</div>
+              </div>
             </div>
           )}
         </Card>
       </div>
 
-      {/* KPI row — Session / Page Views style */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard title="Активно" value={String(activeMin)} suffix="мин" hint="без idle" pct={matchPct} />
-        <KpiCard title="Idle" value={String(idleMin)} suffix="мин" hint="без ввода" pct={Math.min(100, idleMin)} invert />
-        <KpiCard title="Matched" value={`${matchPct}`} suffix="%" hint="назначено задачам" pct={matchPct} />
-        <KpiCard
-          title="Сегменты"
-          value={String(segments)}
-          suffix=""
-          hint={data?.kpi.top_task ? `топ: ${data.kpi.top_task}` : "за день"}
-          pct={Math.min(100, segments)}
-        />
-      </div>
-
-      <ActivityTimeline day={day} segments={data?.timeline || []} />
-
       <Card className="p-5">
-        <div className="mb-1 font-semibold tracking-tight">По приложениям</div>
-        <p className="mb-4 text-sm text-[var(--color-muted-foreground)]">
-          Время в минутах за выбранный период
+        <div className="mb-1 font-semibold tracking-tight">По компаниям (Bitrix24)</div>
+        <p className="mb-3 text-sm text-[var(--color-muted-foreground)]">
+          Порталы <span className="font-mono">*.bitrix24.ru</span> по субдомену
         </p>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={appBars} layout="vertical" margin={{ left: 4, right: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }} />
-              <YAxis
-                type="category"
-                dataKey="name"
-                width={88}
-                tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
-              />
+        {companyRows.length === 0 ? (
+          <div className="flex h-28 items-center justify-center text-sm text-[var(--color-muted-foreground)]">
+            Пока нет визитов на порталы Bitrix24
+          </div>
+        ) : (
+          <div className="h-44">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={companyRows}
+                margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                barCategoryGap="18%"
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
+                  interval={0}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: "var(--color-muted-foreground)" }}
+                  width={36}
+                  tickFormatter={(v) => `${Math.round(Number(v) / 60)}м`}
+                />
                 <Tooltip
+                  wrapperStyle={{ zIndex: 50 }}
                   contentStyle={{
-                    background: "var(--color-card)",
+                    background: "var(--color-popover)",
                     border: "1px solid var(--color-border)",
                     borderRadius: 8,
-                    color: "var(--color-foreground)",
                   }}
-                  labelStyle={{ color: "var(--color-muted-foreground)" }}
-                  formatter={(v: number) => [`${v} мин`, "время"]}
+                  labelStyle={{ color: "var(--color-foreground)" }}
+                  itemStyle={{ color: "var(--color-foreground)" }}
+                  formatter={(v: number) => [formatDuration(v), "время"]}
                 />
-                <Bar dataKey="minutes" fill="var(--color-foreground)" radius={[0, 6, 6, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+                <Bar dataKey="seconds" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                  {companyRows.map((c) => (
+                    <Cell key={c.name} fill={c.color} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </Card>
-    </div>
-  );
-}
 
-function KpiCard({
-  title,
-  value,
-  suffix,
-  hint,
-  pct,
-  invert,
-}: {
-  title: string;
-  value: string;
-  suffix: string;
-  hint: string;
-  pct: number;
-  invert?: boolean;
-}) {
-  return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-2">
-        <div className="text-sm font-semibold tracking-tight">{title}</div>
-        <Badge tone={!invert && pct >= 50 ? "good" : "neutral"}>%{Math.round(pct)}</Badge>
-      </div>
-      <div className="mt-3 flex items-baseline gap-1.5">
-        <span className="text-3xl font-bold tracking-tight">{value}</span>
-        {suffix ? <span className="text-sm text-[var(--color-muted-foreground)]">{suffix}</span> : null}
-      </div>
-      <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">{hint}</p>
-    </Card>
+      <ActivityTimeline day={day} segments={data?.timeline || []} />
+    </div>
   );
 }

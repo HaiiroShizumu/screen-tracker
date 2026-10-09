@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS match_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  task_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(kind, pattern)
+);
 `);
 
 /** Additive column migrations (SQLite has no IF NOT EXISTS for columns). */

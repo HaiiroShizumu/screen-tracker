@@ -42,35 +42,47 @@ function encodePng(rgba, width, height) {
   ]);
 }
 
-/** Template bar-chart icon for macOS menu bar. levels: 0..7 */
-function sparklineIcon(levels, size = 18) {
-  const n = levels.length || 12;
+function fillRect(rgba, W, x0, y0, x1, y1, a = 230) {
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (x < 0 || y < 0 || x >= W) continue;
+      const o = (y * W + x) * 4;
+      rgba[o] = 0;
+      rgba[o + 1] = 0;
+      rgba[o + 2] = 0;
+      rgba[o + 3] = a;
+    }
+  }
+}
+
+/** Template monitor icon for macOS menu bar */
+function monitorIcon(size = 18) {
   const scale = 2;
   const W = size * scale;
   const H = size * scale;
   const rgba = Buffer.alloc(W * H * 4, 0);
+  const s = scale;
 
-  const pad = 2 * scale;
-  const gap = Math.max(1, scale);
-  const barW = Math.max(scale, Math.floor((W - pad * 2 - gap * (n - 1)) / n));
-  const maxH = H - pad * 2;
+  // screen frame
+  const sx = 3 * s;
+  const sy = 2 * s;
+  const sw = 12 * s;
+  const sh = 9 * s;
+  const t = Math.max(2, s); // stroke thickness
+  fillRect(rgba, W, sx, sy, sx + sw, sy + t); // top
+  fillRect(rgba, W, sx, sy + sh - t, sx + sw, sy + sh); // bottom
+  fillRect(rgba, W, sx, sy, sx + t, sy + sh); // left
+  fillRect(rgba, W, sx + sw - t, sy, sx + sw, sy + sh); // right
 
-  for (let i = 0; i < n; i++) {
-    const lv = Math.max(0, Math.min(7, levels[i] || 0));
-    const h = lv === 0 ? 0 : Math.max(scale, Math.round((lv / 7) * maxH));
-    const x0 = pad + i * (barW + gap);
-    const y0 = H - pad - h;
-    for (let y = y0; y < H - pad; y++) {
-      for (let x = x0; x < x0 + barW && x < W; x++) {
-        if (x < 0 || y < 0) continue;
-        const o = (y * W + x) * 4;
-        rgba[o] = 0;
-        rgba[o + 1] = 0;
-        rgba[o + 2] = 0;
-        rgba[o + 3] = 230;
-      }
-    }
-  }
+  // stand neck
+  const neckW = 2 * s;
+  const neckX = Math.floor(W / 2 - neckW / 2);
+  fillRect(rgba, W, neckX, sy + sh, neckX + neckW, sy + sh + 2 * s);
+
+  // stand base
+  const baseW = 6 * s;
+  const baseX = Math.floor(W / 2 - baseW / 2);
+  fillRect(rgba, W, baseX, sy + sh + 2 * s, baseX + baseW, sy + sh + 2 * s + t);
 
   const png = encodePng(rgba, W, H);
   const img = nativeImage.createFromBuffer(png, { scaleFactor: scale });
@@ -82,12 +94,6 @@ function sparklineIcon(levels, size = 18) {
   return img;
 }
 
-const SPARK_CHARS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇"];
-
-function sparkTitle(levels) {
-  return levels.map((l) => SPARK_CHARS[Math.max(0, Math.min(7, l || 0))]).join("");
-}
-
 function fmtMin(sec) {
   const m = Math.round((sec || 0) / 60);
   if (m < 60) return `${m}м`;
@@ -95,4 +101,4 @@ function fmtMin(sec) {
   return `${h}ч${m % 60}м`;
 }
 
-module.exports = { sparklineIcon, sparkTitle, fmtMin };
+module.exports = { monitorIcon, fmtMin };

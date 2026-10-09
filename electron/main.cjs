@@ -2,7 +2,7 @@ const { app, BrowserWindow, shell, dialog, Notification, Tray, Menu, nativeImage
 const path = require("path");
 const { spawn } = require("child_process");
 const { checkMacPermissions, openAutomationSettings } = require("./permissions.cjs");
-const { sparklineIcon, sparkTitle, fmtMin } = require("./tray-chart.cjs");
+const { monitorIcon, fmtMin } = require("./tray-chart.cjs");
 
 const PORT = process.env.PORT || 3847;
 const REMIND_MS = 4 * 60 * 60 * 1000;
@@ -156,12 +156,6 @@ function buildTrayMenu(data) {
       label: `Последний час · ${fmtMin(data.total_sec || 0)}`,
       enabled: false,
     });
-    if (data.spark?.length) {
-      items.push({
-        label: `График ${sparkTitle(data.spark)}`,
-        enabled: false,
-      });
-    }
     items.push({ type: "separator" });
 
     const apps = data.apps || [];
@@ -207,15 +201,13 @@ function buildTrayMenu(data) {
 async function refreshTray() {
   if (!tray) return;
   const data = await fetchTray();
-  const levels = data?.spark?.length ? data.spark : Array(12).fill(0);
   try {
-    tray.setImage(sparklineIcon(levels));
+    tray.setImage(monitorIcon());
   } catch (e) {
     console.warn("[tray] setImage", e);
   }
   if (process.platform === "darwin") {
-    const total = data ? fmtMin(data.total_sec || 0) : "…";
-    tray.setTitle(` ${sparkTitle(levels)} ${total}`);
+    tray.setTitle("");
   }
   const tipApps = (data?.apps || [])
     .slice(0, 3)
@@ -233,7 +225,7 @@ function setupTray() {
   const fallback = nativeImage.createFromDataURL(
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAQAAAC1+jfqAAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH+aAAAAAElFTkSuQmCC"
   );
-  tray = new Tray(sparklineIcon(Array(12).fill(1)) || fallback);
+  tray = new Tray(monitorIcon() || fallback);
   tray.setToolTip("Screen Tracker");
   tray.on("click", () => showMainWindow());
   tray.setContextMenu(buildTrayMenu(null));

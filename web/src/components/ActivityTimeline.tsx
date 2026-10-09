@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CATEGORY_COLORS, CATEGORY_LABELS, type Category } from "@/lib/categories";
 import { formatDuration } from "@/lib/utils";
 import { Badge, Button, Card, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { AppIcon } from "@/components/AppIcon";
 
 export type TimelineSeg = {
-  id: number;
+  id: string | number;
   ts_start: string;
   ts_end: string;
   duration_sec: number;
@@ -12,6 +14,9 @@ export type TimelineSeg = {
   title: string | null;
   url: string | null;
   domain: string | null;
+  category: Category;
+  row_key: string;
+  segment_count?: number;
 };
 
 type Props = {
@@ -37,13 +42,6 @@ function fmtClock(mins: number) {
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
-function hashTone(s: string) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  const shades = [0.9, 0.75, 0.6, 0.45, 0.35];
-  return shades[Math.abs(h) % shades.length];
-}
-
 export function ActivityTimeline({ day, segments }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
@@ -52,7 +50,7 @@ export function ActivityTimeline({ day, segments }: Props) {
 
   const full = useMemo(() => {
     if (!segments.length) {
-      return { start: 0, end: 24 * 60, span: 24 * 60 };
+      return { start: 9 * 60, end: 18 * 60, span: 9 * 60 };
     }
     const starts = segments.map((s) => toMin(s.ts_start));
     const ends = segments.map((s) => toMin(s.ts_end));
@@ -74,6 +72,23 @@ export function ActivityTimeline({ day, segments }: Props) {
       return b >= filter.from && a <= filter.to;
     });
   }, [segments, filter]);
+
+  const rows = useMemo(() => {
+    const map = new Map<string, TimelineSeg[]>();
+    for (const s of filtered) {
+      const key = s.row_key || s.domain || s.app;
+      const list = map.get(key) || [];
+      list.push(s);
+      map.set(key, list);
+    }
+    return [...map.entries()]
+      .map(([key, segs]) => ({
+        key,
+        segs,
+        total: segs.reduce((a, s) => a + s.duration_sec, 0),
+      }))
+      .sort((a, b) => b.total - a.total);
+  }, [filtered]);
 
   const filteredSec = useMemo(
     () => filtered.reduce((sum, s) => sum + s.duration_sec, 0),
@@ -137,275 +152,303 @@ export function ActivityTimeline({ day, segments }: Props) {
     { label: "Вечер", from: 18 * 60, to: 23 * 60 },
   ];
 
+  const fromPct = pct(filter.from);
+  const toPct = pct(filter.to);
+
   return (
-    <Card className="p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="font-semibold tracking-tight">Timeline</div>
-          <p className="text-sm text-[var(--color-muted-foreground)]">
-            {day} · наведи на полоску · выдели диапазон мышкой или ползунками
-          </p>
+    <div className="grid gap-4 md:grid-cols-[minmax(11rem,14rem)_minmax(0,1fr)] md:items-stretch">
+      <Card className="order-2 flex h-full max-h-[36rem] min-h-0 flex-col p-3 md:order-1">
+        <div className="mb-0.5 text-sm font-semibold tracking-tight">Сессии</div>
+        <p className="mb-2 text-[11px] text-[var(--color-muted-foreground)]">
+          {formatDuration(filteredSec)}
+        </p>
+        <div className="min-h-0 flex-1 space-y-0 overflow-auto text-xs">
+          {filtered.length === 0 ? (
+            <div className="py-6 text-center text-[var(--color-muted-foreground)]">
+              Нет сессий
+            </div>
+          ) : (
+            filtered.map((seg) => (
+              <div
+                key={seg.id}
+                className="flex items-center gap-1.5 border-b border-[var(--color-border)] py-1.5 last:border-0"
+                title={`${seg.domain || seg.app}${seg.title ? ` — ${seg.title}` : ""} · ${formatDuration(seg.duration_sec)}`}
+              >
+                <AppIcon app={seg.app} domain={seg.domain} url={seg.url} />
+                <span
+                  className="inline-block h-1.5 w-1.5 shrink-0 rounded-sm"
+                  style={{ background: CATEGORY_COLORS[seg.category] }}
+                />
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {seg.domain || seg.app}
+                </span>
+                <span className="shrink-0 tabular-nums text-[10px] text-[var(--color-muted-foreground)]">
+                  {formatDuration(seg.duration_sec)}
+                </span>
+              </div>
+            ))
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+      </Card>
+
+      <Card className="order-1 flex min-h-0 flex-col p-5 md:order-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-semibold tracking-tight">Timeline</div>
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              {day} · тяни вертикальные линии, чтобы сузить диапазон
+            </p>
+          </div>
           <Badge>
             {filtered.length}/{segments.length} · {formatDuration(filteredSec)}
           </Badge>
         </div>
-      </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        {presets.map((p) => (
-          <Button
-            key={p.label}
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              setFilter({
-                from: Math.max(full.start, p.from),
-                to: Math.min(full.end, p.to),
-              })
-            }
-          >
-            {p.label}
-          </Button>
-        ))}
-        <div className="ml-auto flex items-center gap-2 text-sm">
-          <Input
-            type="time"
-            className="w-[7.5rem]"
-            value={fmtClock(filter.from)}
-            onChange={(e) => {
-              const [h, m] = e.target.value.split(":").map(Number);
-              if (Number.isNaN(h)) return;
-              setFilter((f) => ({ ...f, from: Math.min(h * 60 + (m || 0), f.to - 5) }));
-            }}
-          />
-          <span className="text-[var(--color-muted-foreground)]">—</span>
-          <Input
-            type="time"
-            className="w-[7.5rem]"
-            value={fmtClock(filter.to)}
-            onChange={(e) => {
-              const [h, m] = e.target.value.split(":").map(Number);
-              if (Number.isNaN(h)) return;
-              setFilter((f) => ({ ...f, to: Math.max(h * 60 + (m || 0), f.from + 5) }));
-            }}
-          />
-        </div>
-      </div>
-
-      {/* ticks */}
-      <div className="relative mt-5 h-4 text-[10px] text-[var(--color-muted-foreground)]">
-        {ticks.map((t) => (
-          <span
-            key={t}
-            className="absolute -translate-x-1/2 font-mono"
-            style={{ left: `${pct(t)}%` }}
-          >
-            {fmtClock(t)}
-          </span>
-        ))}
-      </div>
-
-      {/* main track */}
-      <div
-        ref={trackRef}
-        className="relative mt-1 h-20 cursor-crosshair select-none overflow-hidden rounded-xl bg-[var(--color-muted)]"
-        onMouseDown={(e) => {
-          if ((e.target as HTMLElement).dataset.handle) return;
-          const m = minsFromClientX(e.clientX);
-          brushOrigin.current = m;
-          setDragging("brush");
-          setFilter({ from: m, to: m + 1 });
-        }}
-        onMouseLeave={() => setHover(null)}
-      >
-        {/* selection overlay outside filter */}
-        <div
-          className="pointer-events-none absolute inset-y-0 left-0 bg-[var(--color-background)]/55"
-          style={{ width: `${pct(filter.from)}%` }}
-        />
-        <div
-          className="pointer-events-none absolute inset-y-0 right-0 bg-[var(--color-background)]/55"
-          style={{ width: `${100 - pct(filter.to)}%` }}
-        />
-
-        {segments.map((seg) => {
-          const a = toMin(seg.ts_start);
-          const b = toMin(seg.ts_end);
-          const left = pct(a);
-          const width = Math.max(pct(b) - pct(a), 0.25);
-          const inFilter = b >= filter.from && a <= filter.to;
-          const label = seg.domain || seg.app;
-          const opacity = hashTone(label);
-          return (
-            <div
-              key={seg.id}
-              className={cn(
-                "absolute top-3 bottom-3 rounded-md transition-opacity",
-                inFilter ? "bg-[var(--color-foreground)]" : "bg-[var(--color-foreground)]/25"
-              )}
-              style={{ left: `${left}%`, width: `${width}%`, opacity: inFilter ? opacity : 0.2 }}
-              onMouseEnter={(e) => {
-                const rect = trackRef.current?.getBoundingClientRect();
-                if (!rect) return;
-                setHover({
-                  seg,
-                  x: e.clientX - rect.left,
-                  y: e.clientY - rect.top,
-                });
-              }}
-              onMouseMove={(e) => {
-                const rect = trackRef.current?.getBoundingClientRect();
-                if (!rect) return;
-                setHover({
-                  seg,
-                  x: e.clientX - rect.left,
-                  y: e.clientY - rect.top,
-                });
-              }}
-              onMouseLeave={() => setHover(null)}
-            />
-          );
-        })}
-
-        {/* range handles */}
-        <Handle
-          left={pct(filter.from)}
-          onDown={() => setDragging("start")}
-          label={fmtClock(filter.from)}
-        />
-        <Handle
-          left={pct(filter.to)}
-          onDown={() => setDragging("end")}
-          label={fmtClock(filter.to)}
-        />
-
-        {hover && (
-          <div
-            className="pointer-events-none absolute z-20 max-w-xs rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 text-xs shadow-lg"
-            style={{
-              left: Math.min(hover.x + 12, (trackRef.current?.clientWidth || 300) - 220),
-              top: Math.max(4, hover.y - 70),
-            }}
-          >
-            <div className="font-semibold">{hover.seg.domain || hover.seg.app}</div>
-            {hover.seg.title && (
-              <div className="mt-0.5 line-clamp-2 text-[var(--color-muted-foreground)]">
-                {hover.seg.title}
-              </div>
-            )}
-            {hover.seg.url && (
-              <div className="mt-1 truncate font-mono text-[10px] text-[var(--color-muted-foreground)]">
-                {hover.seg.url}
-              </div>
-            )}
-            <div className="mt-2 flex justify-between gap-3 font-mono text-[var(--color-muted-foreground)]">
-              <span>
-                {new Date(hover.seg.ts_start).toLocaleTimeString()} –{" "}
-                {new Date(hover.seg.ts_end).toLocaleTimeString()}
-              </span>
-              <span>{formatDuration(hover.seg.duration_sec)}</span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* dual range slider */}
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <label className="text-xs text-[var(--color-muted-foreground)]">
-          От {fmtClock(filter.from)}
-          <input
-            type="range"
-            min={full.start}
-            max={full.end}
-            step={1}
-            value={filter.from}
-            onChange={(e) =>
-              setFilter((f) => ({
-                ...f,
-                from: Math.min(Number(e.target.value), f.to - 5),
-              }))
-            }
-            className="mt-1 w-full accent-[var(--color-foreground)]"
-          />
-        </label>
-        <label className="text-xs text-[var(--color-muted-foreground)]">
-          До {fmtClock(filter.to)}
-          <input
-            type="range"
-            min={full.start}
-            max={full.end}
-            step={1}
-            value={filter.to}
-            onChange={(e) =>
-              setFilter((f) => ({
-                ...f,
-                to: Math.max(Number(e.target.value), f.from + 5),
-              }))
-            }
-            className="mt-1 w-full accent-[var(--color-foreground)]"
-          />
-        </label>
-      </div>
-
-      <div className="mt-5 max-h-72 space-y-0 overflow-auto text-sm">
-        {filtered.length === 0 ? (
-          <div className="py-8 text-center text-[var(--color-muted-foreground)]">
-            Нет сегментов в выбранном диапазоне
-          </div>
-        ) : (
-          filtered.map((seg) => (
-            <div
-              key={seg.id}
-              className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] py-2.5 last:border-0"
-              onMouseEnter={() =>
-                setHover({ seg, x: 40, y: 20 })
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {presets.map((p) => (
+            <Button
+              key={p.label}
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setFilter({
+                  from: Math.max(full.start, p.from),
+                  to: Math.min(full.end, p.to),
+                })
               }
-              onMouseLeave={() => setHover(null)}
             >
-              <div className="min-w-0">
-                <div className="truncate font-medium">
-                  {seg.domain || seg.app}
-                  {seg.title ? ` — ${seg.title}` : ""}
-                </div>
-                <div className="font-mono text-xs text-[var(--color-muted-foreground)]">
-                  {new Date(seg.ts_start).toLocaleTimeString()} –{" "}
-                  {new Date(seg.ts_end).toLocaleTimeString()}
-                  {seg.url ? ` · ${seg.url}` : ""}
-                </div>
-              </div>
-              <span className="shrink-0 text-[var(--color-muted-foreground)]">
-                {formatDuration(seg.duration_sec)}
-              </span>
+              {p.label}
+            </Button>
+          ))}
+          <div className="ml-auto flex items-center gap-2 text-sm">
+            <Input
+              type="time"
+              className="w-[7.5rem]"
+              value={fmtClock(filter.from)}
+              onChange={(e) => {
+                const [h, m] = e.target.value.split(":").map(Number);
+                if (Number.isNaN(h)) return;
+                setFilter((f) => ({ ...f, from: Math.min(h * 60 + (m || 0), f.to - 5) }));
+              }}
+            />
+            <span className="text-[var(--color-muted-foreground)]">—</span>
+            <Input
+              type="time"
+              className="w-[7.5rem]"
+              value={fmtClock(filter.to)}
+              onChange={(e) => {
+                const [h, m] = e.target.value.split(":").map(Number);
+                if (Number.isNaN(h)) return;
+                setFilter((f) => ({ ...f, to: Math.max(h * 60 + (m || 0), f.from + 5) }));
+              }}
+            />
+          </div>
+        </div>
+
+        <div
+          className="relative mt-5 select-none"
+          onMouseLeave={() => setHover(null)}
+        >
+          {rows.length === 0 ? (
+            <div className="py-10 text-center text-sm text-[var(--color-muted-foreground)]">
+              Нет сессий в выбранном диапазоне
             </div>
-          ))
-        )}
-      </div>
-    </Card>
+          ) : (
+            <div
+              className="relative"
+              onMouseDown={(e) => {
+                if ((e.target as HTMLElement).dataset.handle) return;
+                if (!(e.target as HTMLElement).closest("[data-gantt-track]")) return;
+                const m = minsFromClientX(e.clientX);
+                brushOrigin.current = m;
+                setDragging("brush");
+                setFilter({ from: m, to: m + 1 });
+              }}
+            >
+              <div className="relative mb-1 ml-[7.5rem] mr-14 h-4 text-[10px] text-[var(--color-muted-foreground)]">
+                {ticks.map((t) => (
+                  <span
+                    key={t}
+                    className="absolute -translate-x-1/2 font-mono"
+                    style={{ left: `${pct(t)}%` }}
+                  >
+                    {fmtClock(t)}
+                  </span>
+                ))}
+              </div>
+              <div className="relative space-y-1.5">
+                <div
+                  ref={trackRef}
+                  className="pointer-events-none absolute inset-y-0 left-[7.5rem] right-14 z-[3]"
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 bg-[var(--color-background)]/55"
+                    style={{ width: `${fromPct}%` }}
+                  />
+                  <div
+                    className="absolute inset-y-0 right-0 bg-[var(--color-background)]/55"
+                    style={{ width: `${100 - toPct}%` }}
+                  />
+                  <RangeEdge
+                    left={fromPct}
+                    label={fmtClock(filter.from)}
+                    onDown={() => setDragging("start")}
+                    active={dragging === "start"}
+                  />
+                  <RangeEdge
+                    left={toPct}
+                    label={fmtClock(filter.to)}
+                    onDown={() => setDragging("end")}
+                    active={dragging === "end"}
+                  />
+                </div>
+
+                {rows.map((row) => {
+                  const sample = row.segs[0];
+                  return (
+                    <div key={row.key} className="relative z-[2] flex items-center gap-2">
+                      <div
+                        className="flex w-[7rem] shrink-0 items-center justify-end gap-1.5 truncate text-xs font-medium"
+                        title={row.key}
+                      >
+                        <AppIcon app={sample?.app} domain={sample?.domain} url={sample?.url} />
+                        <span className="truncate">{row.key}</span>
+                      </div>
+                      <div
+                        data-gantt-track
+                        className="relative h-8 flex-1 overflow-hidden rounded-md bg-[var(--color-muted)]"
+                      >
+                        {row.segs.map((seg) => {
+                          const a = toMin(seg.ts_start);
+                          const b = toMin(seg.ts_end);
+                          const left = pct(a);
+                          const width = Math.max(pct(b) - pct(a), 0.35);
+                          return (
+                            <div
+                              key={seg.id}
+                              className="absolute top-1 bottom-1 rounded-sm"
+                              style={{
+                                left: `${left}%`,
+                                width: `${width}%`,
+                                background:
+                                  CATEGORY_COLORS[seg.category] || CATEGORY_COLORS.other,
+                              }}
+                              onMouseEnter={(e) => {
+                                const wrap = e.currentTarget.closest(".relative.mt-5");
+                                const rect = wrap?.getBoundingClientRect();
+                                if (!rect) return;
+                                setHover({
+                                  seg,
+                                  x: e.clientX - rect.left,
+                                  y: e.clientY - rect.top,
+                                });
+                              }}
+                              onMouseMove={(e) => {
+                                const wrap = e.currentTarget.closest(".relative.mt-5");
+                                const rect = wrap?.getBoundingClientRect();
+                                if (!rect) return;
+                                setHover({
+                                  seg,
+                                  x: e.clientX - rect.left,
+                                  y: e.clientY - rect.top,
+                                });
+                              }}
+                              onMouseLeave={() => setHover(null)}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="w-14 shrink-0 text-right text-[10px] tabular-nums text-[var(--color-muted-foreground)]">
+                        {formatDuration(row.total)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {hover && (
+            <div
+              className="pointer-events-none absolute z-50 max-w-xs rounded-lg border border-[var(--color-border)] bg-[var(--color-popover)] p-3 text-xs shadow-lg"
+              style={{
+                left: Math.min(hover.x + 12, 280),
+                top: Math.max(4, hover.y - 70),
+              }}
+            >
+              <div className="flex items-center gap-2 font-semibold">
+                <span
+                  className="inline-block h-2 w-2 rounded-sm"
+                  style={{ background: CATEGORY_COLORS[hover.seg.category] }}
+                />
+                {hover.seg.domain || hover.seg.app}
+              </div>
+              <div className="mt-0.5 text-[var(--color-muted-foreground)]">
+                {CATEGORY_LABELS[hover.seg.category]}
+                {hover.seg.segment_count && hover.seg.segment_count > 1
+                  ? ` · ${hover.seg.segment_count} сегм.`
+                  : ""}
+              </div>
+              {hover.seg.title && (
+                <div className="mt-0.5 line-clamp-2 text-[var(--color-muted-foreground)]">
+                  {hover.seg.title}
+                </div>
+              )}
+              <div className="mt-2 flex justify-between gap-3 font-mono text-[var(--color-muted-foreground)]">
+                <span>
+                  {new Date(hover.seg.ts_start).toLocaleTimeString()} –{" "}
+                  {new Date(hover.seg.ts_end).toLocaleTimeString()}
+                </span>
+                <span>{formatDuration(hover.seg.duration_sec)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
   );
 }
 
-function Handle({
+function RangeEdge({
   left,
-  onDown,
   label,
+  onDown,
+  active,
 }: {
   left: number;
-  onDown: () => void;
   label: string;
+  onDown: () => void;
+  active: boolean;
 }) {
   return (
     <div
       data-handle="1"
-      className="absolute top-0 bottom-0 z-10 w-3 -translate-x-1/2 cursor-ew-resize"
+      title={label}
+      className={cn(
+        "pointer-events-auto absolute top-0 bottom-0 z-10 w-4 -translate-x-1/2 cursor-ew-resize",
+        active && "z-20"
+      )}
       style={{ left: `${left}%` }}
       onMouseDown={(e) => {
+        e.preventDefault();
         e.stopPropagation();
         onDown();
       }}
     >
-      <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-[var(--color-foreground)]" />
+      <div
+        className={cn(
+          "absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 transition",
+          active ? "bg-[var(--color-foreground)]" : "bg-[var(--color-foreground)]/70"
+        )}
+      />
+      <div
+        className={cn(
+          "absolute top-1/2 left-1/2 h-6 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full transition",
+          active
+            ? "bg-[var(--color-foreground)]"
+            : "bg-[var(--color-foreground)]/40 hover:bg-[var(--color-foreground)]/80"
+        )}
+      />
       <div className="absolute -top-5 left-1/2 -translate-x-1/2 rounded bg-[var(--color-foreground)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--color-background)]">
         {label}
       </div>

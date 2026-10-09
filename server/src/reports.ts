@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { db } from "./db.js";
+import { db, getMeta } from "./db.js";
 import { dayKey, formatDuration } from "./util.js";
 import { rebuildMatches } from "./matcher.js";
 
@@ -65,9 +65,10 @@ export function buildMarkdown(day = dayKey()): string {
 }
 
 export async function enrichWithAi(md: string): Promise<string> {
-  const base = process.env.XIAOMI_BASE_URL?.replace(/\/?$/, "");
-  const key = process.env.XIAOMI_API_KEY;
-  const model = process.env.XIAOMI_MODEL || "mimo-v2.6-flash";
+  const base =
+    (getMeta("ai_base_url") || process.env.XIAOMI_BASE_URL || "").replace(/\/?$/, "");
+  const key = getMeta("ai_api_key") || process.env.XIAOMI_API_KEY || "";
+  const model = getMeta("ai_model") || process.env.XIAOMI_MODEL || "mimo-v2.6-flash";
   if (!base || !key) return md;
 
   const res = await fetch(`${base}/chat/completions`, {

@@ -1,5 +1,6 @@
 export type MatchConfidence = "high" | "suggested" | "manual" | "none";
-export type MatchStatus = "pending" | "confirmed" | "pushed";
+export type MatchStatus = "pending" | "confirmed" | "pushed" | "ignored";
+export type Category = "code" | "research" | "ai" | "comms" | "other";
 
 export interface ActivitySegment {
   id: number;

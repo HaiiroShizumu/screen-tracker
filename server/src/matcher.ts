@@ -1,9 +1,9 @@
 import { db } from "./db.js";
-import { baseDomain, dayBounds, dayKey, groupKey } from "./util.js";
+import { baseDomain, companyFromHost, dayBounds, dayKey, groupKey, trackDomain } from "./util.js";
 import { MISC_APP_LABEL, normalizeApp } from "./misc-apps.js";
 import { isNoiseApp, isUsefulSegment } from "./noise.js";
 export type MatchConfidence = "high" | "suggested" | "manual" | "none";
-export type MatchStatus = "pending" | "confirmed" | "pushed";
+export type MatchStatus = "pending" | "confirmed" | "pushed" | "ignored";
 export type MatchGroup = {
   group_key: string;
   day: string;
@@ -35,12 +35,19 @@ const CONF_RANK: Record<MatchConfidence, number> = {
 function scoreDomain(domain: string | null, webs: string[]): MatchConfidence {
   if (!domain || webs.length === 0) return "none";
   const d = domain.toLowerCase();
+  const company = companyFromHost(d);
   const b = baseDomain(d);
   for (const w of webs) {
-    if (w === d) return "high";
+    const ww = w.toLowerCase();
+    if (ww === d) return "high";
+    // same Bitrix24 portal company
+    if (company && companyFromHost(ww) === company) return "high";
   }
+  // don't collapse all *.bitrix24.* into one suggested match
+  if (company) return "none";
   for (const w of webs) {
-    if (b && (w === b || baseDomain(w) === b)) return "suggested";
+    const ww = w.toLowerCase();
+    if (b && (ww === b || baseDomain(ww) === b)) return "suggested";
   }
   return "none";
 }
@@ -64,7 +71,7 @@ function scoreProject(project: string | null, taskTitle: string): MatchConfidenc
   return "none";
 }
 
-/** Group key: base domain for similar URLs; Cursor/Code project name; else app. */
+/** Group key: company portal / base domain; Cursor/Code project; else app. */
 function bucketKey(day: string, app: string, domain: string | null): {
   key: string;
   domain: string | null;
@@ -73,9 +80,13 @@ function bucketKey(day: string, app: string, domain: string | null): {
   if (project) {
     return { key: groupKey(day, null, `Cursor · ${project}`), domain: null };
   }
-  const base = baseDomain(domain);
-  if (base) {
-    return { key: groupKey(day, base, app), domain: base };
+  const company = companyFromHost(domain);
+  if (company) {
+    return { key: groupKey(day, `company:${company}`, app), domain: domain };
+  }
+  const tracked = trackDomain(domain);
+  if (tracked) {
+    return { key: groupKey(day, tracked, app), domain: tracked };
   }
   return { key: groupKey(day, null, app), domain: null };
 }
@@ -130,6 +141,10 @@ export function rebuildMatches(day = dayKey()): MatchGroup[] {
 
   const tasks = db.prepare("SELECT task_id, title, web_urls FROM bitrix_tasks").all() as TaskRow[];
 
+  const rules = db
+    .prepare(`SELECT kind, pattern, task_id FROM match_rules`)
+    .all() as Array<{ kind: string; pattern: string; task_id: number }>;
+
   const upsert = db.prepare(
     `INSERT INTO activity_matches (segment_group_key, day, domain, task_id, confidence, status, duration_sec)
      VALUES (@key, @day, @domain, @task_id, @confidence, 'pending', @duration)
@@ -137,11 +152,14 @@ export function rebuildMatches(day = dayKey()): MatchGroup[] {
        duration_sec = excluded.duration_sec,
        domain = excluded.domain,
        task_id = CASE
-         WHEN activity_matches.status IN ('confirmed','pushed') OR activity_matches.confidence = 'manual'
+         WHEN activity_matches.status IN ('confirmed','pushed','ignored') OR activity_matches.confidence = 'manual'
          THEN activity_matches.task_id ELSE excluded.task_id END,
        confidence = CASE
-         WHEN activity_matches.status IN ('confirmed','pushed') OR activity_matches.confidence = 'manual'
-         THEN activity_matches.confidence ELSE excluded.confidence END`
+         WHEN activity_matches.status IN ('confirmed','pushed','ignored') OR activity_matches.confidence = 'manual'
+         THEN activity_matches.confidence ELSE excluded.confidence END,
+       status = CASE
+         WHEN activity_matches.status IN ('confirmed','pushed','ignored') THEN activity_matches.status
+         ELSE 'pending' END`
   );
 
   for (const [key, seg] of buckets) {
@@ -150,44 +168,84 @@ export function rebuildMatches(day = dayKey()): MatchGroup[] {
       confidence: "none",
     };
     const project = projectFromApp(seg.app);
-    for (const t of tasks) {
-      let webs: string[] = [];
-      try {
-        webs = JSON.parse(t.web_urls) as string[];
-      } catch {
-        webs = [];
+
+    // saved rules first
+    for (const rule of rules) {
+      if (rule.kind === "domain" && seg.domain) {
+        const d = seg.domain.toLowerCase();
+        const p = rule.pattern.toLowerCase();
+        if (d === p || d.endsWith(`.${p}`) || d.includes(p)) {
+          best = { task_id: rule.task_id, confidence: "suggested" };
+          break;
+        }
       }
-      let c = scoreDomain(seg.domain, webs);
-      const byProj = scoreProject(project, t.title);
-      if (CONF_RANK[byProj] > CONF_RANK[c]) c = byProj;
-      if (CONF_RANK[c] > CONF_RANK[best.confidence]) {
-        best = { task_id: t.task_id, confidence: c };
-        if (c === "high") break;
+      if (rule.kind === "project" && project) {
+        if (project.toLowerCase() === rule.pattern.toLowerCase()) {
+          best = { task_id: rule.task_id, confidence: "suggested" };
+          break;
+        }
+      }
+    }
+
+    if (best.confidence === "none") {
+      for (const t of tasks) {
+        let webs: string[] = [];
+        try {
+          webs = JSON.parse(t.web_urls) as string[];
+        } catch {
+          webs = [];
+        }
+        let c = scoreDomain(seg.domain, webs);
+        const byProj = scoreProject(project, t.title);
+        if (CONF_RANK[byProj] > CONF_RANK[c]) c = byProj;
+        if (CONF_RANK[c] > CONF_RANK[best.confidence]) {
+          best = { task_id: t.task_id, confidence: c };
+          if (c === "high") break;
+        }
       }
     }
     // misc bucket never auto-matches to Bitrix tasks
     const confidence = seg.app === MISC_APP_LABEL ? ("none" as MatchConfidence) : best.confidence;
     const task_id = seg.app === MISC_APP_LABEL ? null : best.task_id || null;
+    const splitOff = db
+      .prepare(
+        `SELECT COALESCE(SUM(duration_sec),0) as sec FROM activity_matches
+         WHERE day = ? AND segment_group_key LIKE ?`
+      )
+      .get(day, `${key}|split:%`) as { sec: number };
+    const duration = Math.max(0, seg.duration_sec - (splitOff.sec || 0));
+    if (duration <= 0 && splitOff.sec > 0) {
+      // all time moved to splits — keep row only if already assigned/pushed
+      const existing = db
+        .prepare(`SELECT status FROM activity_matches WHERE segment_group_key = ?`)
+        .get(key) as { status: string } | undefined;
+      if (!existing || !["confirmed", "pushed", "ignored"].includes(existing.status)) {
+        db.prepare(`DELETE FROM activity_matches WHERE segment_group_key = ?`).run(key);
+        continue;
+      }
+    }
     upsert.run({
       key,
       day,
       domain: seg.domain,
       task_id,
       confidence,
-      duration: seg.duration_sec,
+      duration: duration > 0 ? duration : seg.duration_sec,
     });
   }
 
-  // remove stale group keys for this day (regrouping / gone segments)
+  // remove stale group keys for this day (keep pushed / ignored / splits)
   const keep = new Set(buckets.keys());
   const old = db
-    .prepare(`SELECT segment_group_key FROM activity_matches WHERE day = ?`)
-    .all(day) as Array<{ segment_group_key: string }>;
+    .prepare(`SELECT segment_group_key, status FROM activity_matches WHERE day = ?`)
+    .all(day) as Array<{ segment_group_key: string; status: string }>;
   const del = db.prepare(
-    `DELETE FROM activity_matches WHERE segment_group_key = ? AND status != 'pushed'`
+    `DELETE FROM activity_matches WHERE segment_group_key = ? AND status NOT IN ('pushed','ignored') AND segment_group_key NOT LIKE '%|split:%'`
   );
   for (const row of old) {
-    if (!keep.has(row.segment_group_key)) del.run(row.segment_group_key);
+    if (keep.has(row.segment_group_key)) continue;
+    if (row.segment_group_key.includes("|split:")) continue;
+    del.run(row.segment_group_key);
   }
 
   return listMatchGroups(day);
@@ -249,9 +307,10 @@ export function listMatchGroups(day = dayKey()): MatchGroup[] {
   }
 
   return rows.map((r) => {
-    const part = r.segment_group_key.slice(day.length + 1);
+    const baseKey = r.segment_group_key.replace(/\|split:\d+$/, "");
+    const part = baseKey.slice(day.length + 1);
     const fromKey = part.startsWith("app:") ? part.slice(4) : null;
-    const hit = meta.get(r.segment_group_key);
+    const hit = meta.get(baseKey) || meta.get(r.segment_group_key);
     return {
       group_key: r.segment_group_key,
       day: r.day,
@@ -269,13 +328,80 @@ export function listMatchGroups(day = dayKey()): MatchGroup[] {
   });
 }
 
-export function assignMatch(groupKeyValue: string, taskId: number | null) {
+function saveRuleFromGroup(groupKeyValue: string, taskId: number) {
+  const row = db
+    .prepare(`SELECT domain FROM activity_matches WHERE segment_group_key = ?`)
+    .get(groupKeyValue) as { domain: string | null } | undefined;
+  const part = groupKeyValue.split("|").slice(1).join("|");
+  const appPart = part.startsWith("app:") ? part.slice(4) : null;
+  const project = appPart ? projectFromApp(appPart) : null;
+  const now = new Date().toISOString();
+  if (project) {
+    db.prepare(
+      `INSERT INTO match_rules (kind, pattern, task_id, created_at)
+       VALUES ('project', ?, ?, ?)
+       ON CONFLICT(kind, pattern) DO UPDATE SET task_id = excluded.task_id, created_at = excluded.created_at`
+    ).run(project, taskId, now);
+  } else if (row?.domain) {
+    db.prepare(
+      `INSERT INTO match_rules (kind, pattern, task_id, created_at)
+       VALUES ('domain', ?, ?, ?)
+       ON CONFLICT(kind, pattern) DO UPDATE SET task_id = excluded.task_id, created_at = excluded.created_at`
+    ).run(baseDomain(row.domain) || row.domain, taskId, now);
+  }
+}
+
+export function assignMatch(groupKeyValue: string, taskId: number | null, saveRule = true) {
   // confidence=manual even when cleared — rebuild must not re-auto-assign
+  const status = taskId == null ? "pending" : "pending";
   db.prepare(
     `UPDATE activity_matches SET task_id = ?, confidence = 'manual',
-     status = CASE WHEN status = 'pushed' THEN 'pushed' ELSE 'pending' END
+     status = CASE WHEN status = 'pushed' THEN 'pushed' ELSE ? END
      WHERE segment_group_key = ?`
-  ).run(taskId, groupKeyValue);
+  ).run(taskId, status, groupKeyValue);
+  if (taskId != null && saveRule) saveRuleFromGroup(groupKeyValue, taskId);
+}
+
+export function ignoreMatch(groupKeyValue: string) {
+  db.prepare(
+    `UPDATE activity_matches SET task_id = NULL, confidence = 'manual', status = 'ignored'
+     WHERE segment_group_key = ? AND status != 'pushed'`
+  ).run(groupKeyValue);
+}
+
+export function unignoreMatch(groupKeyValue: string) {
+  db.prepare(
+    `UPDATE activity_matches SET status = 'pending', confidence = 'manual'
+     WHERE segment_group_key = ? AND status = 'ignored'`
+  ).run(groupKeyValue);
+}
+
+/** Split seconds off a group into a new pending pool entry. */
+export function splitMatch(groupKeyValue: string, seconds: number) {
+  const row = db
+    .prepare(`SELECT * FROM activity_matches WHERE segment_group_key = ?`)
+    .get(groupKeyValue) as
+    | {
+        segment_group_key: string;
+        day: string;
+        domain: string | null;
+        duration_sec: number;
+        status: string;
+      }
+    | undefined;
+  if (!row) throw new Error("group not found");
+  if (row.status === "pushed") throw new Error("cannot split pushed group");
+  const take = Math.max(1, Math.min(Math.round(seconds), row.duration_sec - 1));
+  if (take >= row.duration_sec) throw new Error("split must leave remainder");
+  const newKey = `${groupKeyValue}|split:${Date.now()}`;
+  db.prepare(
+    `UPDATE activity_matches SET duration_sec = duration_sec - ? WHERE segment_group_key = ?`
+  ).run(take, groupKeyValue);
+  db.prepare(
+    `INSERT INTO activity_matches (segment_group_key, day, domain, task_id, confidence, status, duration_sec)
+     VALUES (?, ?, ?, NULL, 'none', 'pending', ?)`
+  ).run(newKey, row.day, row.domain, take);
+  return newKey;
 }
 
 export function markConfirmed(groupKeys: string[]) {

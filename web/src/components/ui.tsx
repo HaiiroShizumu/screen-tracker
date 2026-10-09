@@ -1,10 +1,5 @@
 import { cn } from "@/lib/utils";
-import type {
-  ButtonHTMLAttributes,
-  HTMLAttributes,
-  InputHTMLAttributes,
-  SelectHTMLAttributes,
-} from "react";
+import { forwardRef, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes } from "react";
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
@@ -18,17 +13,16 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   );
 }
 
-export function Button({
-  className,
-  variant = "default",
-  size = "md",
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "outline" | "ghost" | "accent" | "secondary";
-  size?: "sm" | "md";
-}) {
+export const Button = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: "default" | "outline" | "ghost" | "accent" | "secondary";
+    size?: "sm" | "md";
+  }
+>(function Button({ className, variant = "default", size = "md", ...props }, ref) {
   return (
     <button
+      ref={ref}
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition disabled:opacity-50",
         size === "sm" ? "px-2.5 py-1.5 text-xs" : "px-3 py-2",
@@ -45,7 +39,7 @@ export function Button({
       {...props}
     />
   );
-}
+});
 
 export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (

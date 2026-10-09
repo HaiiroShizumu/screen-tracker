@@ -32,6 +32,13 @@
   --color-chart-3: #737373;
   --color-chart-4: #a3a3a3;
   --color-chart-5: #d4d4d4;
+
+  /* category colors */
+  --color-cat-code: #3b82f6;
+  --color-cat-research: #14b8a6;
+  --color-cat-ai: #8b5cf6;
+  --color-cat-comms: #f97316;
+  --color-cat-other: #64748b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -62,7 +69,18 @@
     --color-chart-3: #a3a3a3;
     --color-chart-4: #737373;
     --color-chart-5: #525252;
+
+    --color-cat-code: #93c5fd;
+    --color-cat-research: #5eead4;
+    --color-cat-ai: #c4b5fd;
+    --color-cat-comms: #fdba74;
+    --color-cat-other: #94a3b8;
   }
+}
+
+/* Recharts tooltips above chart layers */
+.recharts-tooltip-wrapper {
+  z-index: 50 !important;
 }
 
 * {

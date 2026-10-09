@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, getMeta } from "./db.js";
+import { db, getMeta, setMeta } from "./db.js";
 import { syncBitrixTasks, listCachedTasks, addElapsed } from "./bitrix.js";
 import {
   rebuildMatches,
@@ -7,6 +7,9 @@ import {
   assignMatch,
   markConfirmed,
   markPushed,
+  ignoreMatch,
+  unignoreMatch,
+  splitMatch,
 } from "./matcher.js";
 import { overview } from "./stats.js";
 import { writeDailyReport, buildMarkdown } from "./reports.js";
@@ -14,9 +17,15 @@ import { dayBounds, dayKey } from "./util.js";
 import type { RangePreset } from "./stats.js";
 import { getPermissionStatus } from "./permissions.js";
 import { normalizeApp } from "./misc-apps.js";
-import { isNoiseApp, isUsefulSegment } from "./noise.js";
+import { isNoiseApp } from "./noise.js";
 
 export const router = Router();
+
+function roundSeconds(sec: number, roundToMin: number | undefined): number {
+  if (!roundToMin || roundToMin <= 0) return Math.max(60, Math.round(sec));
+  const step = roundToMin * 60;
+  return Math.max(step, Math.round(sec / step) * step);
+}
 
 router.get("/health", (_req, res) => {
   res.json({ ok: true, synced_at: getMeta("bitrix_synced_at") });
@@ -28,6 +37,46 @@ router.get("/permissions", async (_req, res) => {
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
+});
+
+function readAiSettings() {
+  const base_url =
+    getMeta("ai_base_url") || process.env.XIAOMI_BASE_URL?.replace(/\/?$/, "") || "";
+  const api_key = getMeta("ai_api_key") || process.env.XIAOMI_API_KEY || "";
+  const model = getMeta("ai_model") || process.env.XIAOMI_MODEL || "mimo-v2.6-flash";
+  return { base_url, api_key, model };
+}
+
+router.get("/settings", (_req, res) => {
+  const ai = readAiSettings();
+  res.json({
+    ai: {
+      base_url: ai.base_url,
+      model: ai.model,
+      has_key: Boolean(ai.api_key),
+    },
+  });
+});
+
+router.put("/settings", (req, res) => {
+  const ai = req.body?.ai || {};
+  if (typeof ai.base_url === "string") {
+    setMeta("ai_base_url", ai.base_url.trim().replace(/\/?$/, ""));
+  }
+  if (typeof ai.model === "string") {
+    setMeta("ai_model", ai.model.trim());
+  }
+  if (typeof ai.api_key === "string" && ai.api_key.trim()) {
+    setMeta("ai_api_key", ai.api_key.trim());
+  }
+  const next = readAiSettings();
+  res.json({
+    ai: {
+      base_url: next.base_url,
+      model: next.model,
+      has_key: Boolean(next.api_key),
+    },
+  });
 });
 
 router.get("/activity", (req, res) => {
@@ -124,21 +173,59 @@ router.get("/matches", (req, res) => {
 });
 
 router.post("/matches/assign", (req, res) => {
-  const { group_key, task_id } = req.body as { group_key: string; task_id: number | null };
+  const { group_key, task_id, save_rule } = req.body as {
+    group_key: string;
+    task_id: number | null;
+    save_rule?: boolean;
+  };
   if (!group_key) return res.status(400).json({ error: "group_key required" });
-  assignMatch(group_key, task_id ?? null);
+  assignMatch(group_key, task_id ?? null, save_rule !== false);
   const day = group_key.split("|")[0] || dayKey();
   res.json({ ok: true, groups: listMatchGroups(day) });
 });
 
+router.post("/matches/ignore", (req, res) => {
+  const { group_key } = req.body as { group_key: string };
+  if (!group_key) return res.status(400).json({ error: "group_key required" });
+  ignoreMatch(group_key);
+  const day = group_key.split("|")[0] || dayKey();
+  res.json({ ok: true, groups: listMatchGroups(day) });
+});
+
+router.post("/matches/unignore", (req, res) => {
+  const { group_key } = req.body as { group_key: string };
+  if (!group_key) return res.status(400).json({ error: "group_key required" });
+  unignoreMatch(group_key);
+  const day = group_key.split("|")[0] || dayKey();
+  res.json({ ok: true, groups: listMatchGroups(day) });
+});
+
+router.post("/matches/split", (req, res) => {
+  try {
+    const { group_key, seconds } = req.body as { group_key: string; seconds: number };
+    if (!group_key || !seconds) return res.status(400).json({ error: "group_key and seconds required" });
+    splitMatch(group_key, Number(seconds));
+    const day = group_key.split("|")[0] || dayKey();
+    res.json({ ok: true, groups: listMatchGroups(day) });
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
 router.post("/matches/confirm", async (req, res) => {
   try {
-    const body = req.body as { group_keys?: string[]; push?: boolean; day?: string };
+    const body = req.body as {
+      group_keys?: string[];
+      push?: boolean;
+      day?: string;
+      round_to?: number;
+      comments?: Record<string, string>;
+    };
     const day = body.day || dayKey();
     let keys = body.group_keys;
     if (!keys?.length) {
       keys = listMatchGroups(day)
-        .filter((g) => g.task_id && g.status !== "pushed")
+        .filter((g) => g.task_id && g.status !== "pushed" && g.status !== "ignored")
         .map((g) => g.group_key);
     }
     markConfirmed(keys);
@@ -146,11 +233,18 @@ router.post("/matches/confirm", async (req, res) => {
     const pushed: Array<{ group_key: string; elapsed_id: number }> = [];
     if (body.push !== false) {
       const groups = listMatchGroups(day).filter(
-        (g) => keys!.includes(g.group_key) && g.task_id && g.status !== "pushed"
+        (g) =>
+          keys!.includes(g.group_key) &&
+          g.task_id &&
+          g.status !== "pushed" &&
+          g.status !== "ignored"
       );
       for (const g of groups) {
-        const comment = `${g.domain || g.app || "activity"} — ${g.titles[0] || ""}`.trim();
-        const elapsedId = await addElapsed(g.task_id!, g.duration_sec, comment);
+        const comment =
+          body.comments?.[g.group_key] ||
+          `${g.domain || g.app || "activity"} — ${g.titles[0] || ""}`.trim();
+        const sec = roundSeconds(g.duration_sec, body.round_to);
+        const elapsedId = await addElapsed(g.task_id!, sec, comment);
         markPushed(g.group_key, elapsedId);
         pushed.push({ group_key: g.group_key, elapsed_id: elapsedId });
       }

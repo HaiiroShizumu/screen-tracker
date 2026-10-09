@@ -16,6 +16,25 @@ export function baseDomain(host: string | null | undefined): string | null {
   return parts.slice(-2).join(".");
 }
 
+/**
+ * Bitrix24 portal → company slug.
+ * smartbiznes58.bitrix24.ru → "smartbiznes58"
+ */
+export function companyFromHost(host: string | null | undefined): string | null {
+  if (!host) return null;
+  const h = host.replace(/^www\./, "").toLowerCase();
+  const m = h.match(/^([a-z0-9][a-z0-9-]*)\.bitrix24\.(ru|com|ua|by|kz)$/i);
+  return m?.[1] || null;
+}
+
+/** Keep Bitrix portals distinct; otherwise collapse to base domain. */
+export function trackDomain(host: string | null | undefined): string | null {
+  if (!host) return null;
+  const company = companyFromHost(host);
+  if (company) return `${company}.bitrix24`;
+  return baseDomain(host) || host.toLowerCase();
+}
+
 export function dayKey(d: Date = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -44,10 +63,14 @@ export function groupKey(day: string, domain: string | null, app: string): strin
 }
 
 export function formatDuration(sec: number): string {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (h > 0) return `${h}ч${m}м`;
-  return `${m}м`;
+  const s = Math.max(0, Math.round(sec));
+  if (s === 0) return "0с";
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h > 0) return r > 0 ? `${h}ч ${m}м ${r}с` : m > 0 ? `${h}ч ${m}м` : `${h}ч`;
+  if (m > 0) return r > 0 ? `${m}м ${r}с` : `${m}м`;
+  return `${r}с`;
 }
 
 export async function fetchTimeout(

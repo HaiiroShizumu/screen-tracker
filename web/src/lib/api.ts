@@ -1,3 +1,5 @@
+import type { Category } from "@/lib/categories";
+
 export type RangePreset = "day" | "week" | "month";
 
 export type MatchGroup = {
@@ -23,12 +25,22 @@ export type Overview = {
     match_pct: number;
     top_task: string | null;
     top_task_sec: number;
+    yesterday_active_sec: number;
+    vs_yesterday_pct: number | null;
+    switches_per_hour: number;
+    longest_session_sec: number;
+    session_count: number;
+    sparkline: number[];
   };
   byApp: { name: string; seconds: number }[];
   byDomain: { name: string; seconds: number }[];
+  byCompany: { name: string; seconds: number }[];
   byTask: { name: string; seconds: number }[];
+  byCategory: { id: Category; name: string; seconds: number }[];
+  hourlyStacked: Array<Record<string, string | number>>;
+  categories: { id: Category; name: string }[];
   timeline: Array<{
-    id: number;
+    id: string | number;
     ts_start: string;
     ts_end: string;
     duration_sec: number;
@@ -36,6 +48,9 @@ export type Overview = {
     title: string | null;
     url: string | null;
     domain: string | null;
+    category: Category;
+    row_key: string;
+    segment_count: number;
   }>;
 };
 
@@ -52,17 +67,13 @@ export type Task = {
 export type DeadlineBucket =
   | "overdue"
   | "today"
-  | "tomorrow"
   | "this_week"
-  | "next_week"
   | "later";
 
 export const KANBAN_COLUMNS: { key: DeadlineBucket; label: string }[] = [
   { key: "overdue", label: "Просрочено" },
   { key: "today", label: "Сегодня" },
-  { key: "tomorrow", label: "Завтра" },
   { key: "this_week", label: "На этой неделе" },
-  { key: "next_week", label: "На след. неделе" },
   { key: "later", label: "Позднее" },
 ];
 
@@ -92,18 +103,12 @@ export function deadlineBucket(deadline: string | null | undefined, now = new Da
   if (dlDay === today) return "today";
 
   const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  if (dlDay === ymd(tomorrow)) return "tomorrow";
+  if (dlDay === ymd(tomorrow)) return "this_week";
 
   const weekStart = startOfWeekMon(now);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
   if (dlDay <= ymd(weekEnd)) return "this_week";
-
-  const nextStart = new Date(weekStart);
-  nextStart.setDate(nextStart.getDate() + 7);
-  const nextEnd = new Date(nextStart);
-  nextEnd.setDate(nextEnd.getDate() + 6);
-  if (dlDay <= ymd(nextEnd)) return "next_week";
 
   return "later";
 }
@@ -131,22 +136,54 @@ export type PermissionStatus = {
   hint?: string;
 };
 
+export type AppSettings = {
+  ai: {
+    base_url: string;
+    model: string;
+    has_key: boolean;
+  };
+};
+
 export const api = {
   permissions: () => req<PermissionStatus>("/permissions"),
+  settings: () => req<AppSettings>("/settings"),
+  saveSettings: (body: { ai: { base_url?: string; model?: string; api_key?: string } }) =>
+    req<AppSettings>("/settings", { method: "PUT", body: JSON.stringify(body) }),
   overview: (range: RangePreset, day: string) =>
     req<Overview>(`/overview?range=${range}&day=${day}`),
   matches: (day: string) => req<{ day: string; groups: MatchGroup[] }>(`/matches?day=${day}`),
   tasks: () => req<{ tasks: Task[] }>("/tasks"),
   syncBitrix: () => req<{ count: number }>("/bitrix/sync", { method: "POST" }),
-  assign: (group_key: string, task_id: number | null) =>
+  assign: (group_key: string, task_id: number | null, save_rule = true) =>
     req<{ groups: MatchGroup[] }>("/matches/assign", {
       method: "POST",
-      body: JSON.stringify({ group_key, task_id }),
+      body: JSON.stringify({ group_key, task_id, save_rule }),
     }),
-  confirm: (group_keys?: string[], push = true, day?: string) =>
+  ignore: (group_key: string) =>
+    req<{ groups: MatchGroup[] }>("/matches/ignore", {
+      method: "POST",
+      body: JSON.stringify({ group_key }),
+    }),
+  split: (group_key: string, seconds: number) =>
+    req<{ groups: MatchGroup[] }>("/matches/split", {
+      method: "POST",
+      body: JSON.stringify({ group_key, seconds }),
+    }),
+  confirm: (
+    group_keys?: string[],
+    push = true,
+    day?: string,
+    opts?: { round_to?: number; comments?: Record<string, string> }
+  ) =>
     req<{ groups: MatchGroup[]; pushed: unknown[] }>("/matches/confirm", {
       method: "POST",
-      body: JSON.stringify({ group_keys, push, day }),
+      body: JSON.stringify({
+        group_keys,
+        push,
+        day,
+        round_to: opts?.round_to,
+        comments: opts?.comments,
+      }),
     }),
   report: (day: string) =>
     req<{ file: string }>("/reports/generate", {
